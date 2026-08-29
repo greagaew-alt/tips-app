@@ -33,7 +33,7 @@
     --font: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
   }
   *{ box-sizing:border-box; margin:0; padding:0; }
-  html,body{ background:var(--bg); color:var(--text); font-family:var(--font); }
+  html,body{ background:var(--bg); color:var(--text); font-family:var(--font); touch-action:manipulation; }
   body{
     -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
     max-width:480px; margin:0 auto; font-size:16px; line-height:1.45; letter-spacing:-.005em;
@@ -429,34 +429,84 @@
     try{ localStorage.setItem(key, JSON.stringify(obj)); }catch(e){}
   })();
 
-  function api(action, p){
-    p = p || {};
-    if (action === "getMonth"){
-      return storeGet("m_" + p.ym).then(function(raw){
-        var obj = parseMonth(raw), days = [], tipsTotal = 0, shifts = 0;
-        Object.keys(obj).map(Number).sort(function(a, b){ return b - a; }).forEach(function(dd){
-          var rec = obj[dd] || {}, tips = Math.max(0, rec.t | 0), worked = rec.w ? 1 : 0;
-          days.push({ d: p.ym + "-" + pad2(dd), tips: tips, worked: worked });
-          tipsTotal += tips; shifts += worked;
-        });
-        var rate = rateFor(shifts);
-        return { ok:true, ym:p.ym, days:days, shifts:shifts, rate:rate,
-                 rateFull:RATE_FULL, rateLow:RATE_LOW, threshold:THRESHOLD,
-                 tipsTotal:tipsTotal, salary:shifts * rate, total:shifts * rate + tipsTotal };
+  /* ---------- модель месяца в памяти + запись ----------
+     Всё редактирование идёт через state.days в памяти — мгновенно, без гонок.
+     На диск пишется ВЕСЬ открытый месяц одним куском, записи строго по очереди
+     (см. doSave) — поэтому быстрые тапы по календарю ничего не теряют. */
+  function monthOf(dateISO){ var p = dateISO.split("-"); return p[0] + "-" + p[1]; }
+
+  var saving = false, pendingSave = false, dirty = false;
+  function scheduleSave(){ dirty = true; doSave(); }
+  function doSave(){
+    if (saving){ pendingSave = true; return; }
+    if (!state || !dirty) return;
+    saving = true; dirty = false;
+    var key = "m_" + state.ym, obj = {};
+    state.days.forEach(function(r){ obj[Number(r.d.split("-")[2])] = { t: r.tips, w: r.worked ? 1 : 0 }; });
+    var p = Object.keys(obj).length ? storeSet(key, JSON.stringify(obj)) : storeDel(key);
+    p.then(function(){
+      saving = false;
+      if (pendingSave || dirty){ pendingSave = false; doSave(); }
+    }, function(){
+      saving = false; dirty = true;
+      toast("Не сохранилось, повтори");
+    });
+  }
+  function flushSave(){
+    if (dirty && !saving) doSave();
+    if (!saving && !pendingSave && !dirty) return Promise.resolve();
+    return new Promise(function(res){
+      var n = 0;
+      (function c(){ ((!saving && !pendingSave && !dirty) || n++ > 160) ? res() : setTimeout(c, 25); })();
+    });
+  }
+
+  function recompute(){
+    var tips = 0, shifts = 0;
+    state.days.forEach(function(r){ tips += r.tips; shifts += r.worked ? 1 : 0; });
+    state.tipsTotal = tips;
+    state.shifts = shifts;
+    state.rate = rateFor(shifts);
+    state.salary = shifts * state.rate;
+    state.total = state.salary + tips;
+  }
+
+  function loadMonth(ymStr){
+    return flushSave().then(function(){ return storeGet("m_" + ymStr); }).then(function(raw){
+      var obj = parseMonth(raw), days = [];
+      Object.keys(obj).map(Number).sort(function(a, b){ return b - a; }).forEach(function(dd){
+        var rec = obj[dd] || {};
+        days.push({ d: ymStr + "-" + pad2(dd), tips: Math.max(0, rec.t | 0), worked: rec.w ? 1 : 0 });
       });
+      state = { ym: ymStr, days: days };
+      recompute();
+      return state;
+    });
+  }
+
+  function mutateDay(dateISO, patch){
+    if (state && monthOf(dateISO) === state.ym){
+      var rec = null, i;
+      for (i = 0; i < state.days.length; i++) if (state.days[i].d === dateISO){ rec = state.days[i]; break; }
+      if (!rec){ rec = { d: dateISO, tips: 0, worked: 0 }; state.days.push(rec); }
+      if (patch.hasOwnProperty("tips"))   rec.tips   = Math.max(0, patch.tips | 0);
+      if (patch.hasOwnProperty("worked")) rec.worked = patch.worked ? 1 : 0;
+      if (!rec.tips && !rec.worked)
+        state.days = state.days.filter(function(r){ return r.d !== dateISO; });
+      state.days.sort(function(a, b){ return a.d < b.d ? 1 : -1; });
+      recompute();
+      scheduleSave();
+      return Promise.resolve();
     }
-    // upsertDay / deleteDay
-    var parts = String(p.date).split("-");
-    var key = "m_" + parts[0] + "-" + parts[1];
-    var day = String(Number(parts[2]));
-    var tips   = action === "deleteDay" ? 0 : Math.max(0, p.tips | 0);
-    var worked = action === "deleteDay" ? 0 : (p.worked ? 1 : 0);
+    // другой месяц (из шторки «другой день») — точечная запись
+    var key = "m_" + monthOf(dateISO), day = String(Number(dateISO.split("-")[2]));
     return storeGet(key).then(function(raw){
-      var obj = parseMonth(raw);
-      if (!tips && !worked) delete obj[day];
-      else obj[day] = { t: tips, w: worked };
+      var obj = parseMonth(raw), o = obj[day] || { t: 0, w: 0 };
+      var t = patch.hasOwnProperty("tips")   ? Math.max(0, patch.tips | 0) : (o.t | 0);
+      var w = patch.hasOwnProperty("worked") ? (patch.worked ? 1 : 0)      : (o.w ? 1 : 0);
+      if (!t && !w) delete obj[day]; else obj[day] = { t: t, w: w };
       return Object.keys(obj).length ? storeSet(key, JSON.stringify(obj)) : storeDel(key);
-    }).then(function(){ return { ok:true }; });
+    }).catch(function(err){ toast("Не сохранилось: " + err.message); });
   }
 
   var toastEl = $("toast"), toastT;
@@ -526,26 +576,37 @@
         + (rec && rec.worked ? " cal__day--work" : "")
         + (wd >= 5 ? " cal__day--we" : "")
         + (dIso === todayISO ? " cal__day--today" : "");
+      b.dataset.d = dIso;
       b.innerHTML = '<span>' + day + '</span>' +
         (rec && rec.tips ? '<span class="cal__tip">' + nf.format(rec.tips) + '</span>' : '');
-      (function(dayIso, node){
-        node.addEventListener("click", function(){ toggleWork(dayIso, node); });
-      })(dIso, b);
       cal.appendChild(b);
     }
   }
 
+  // делегированный обработчик — один на весь календарь, не зависит от пересборки
+  $("cal").addEventListener("click", function(e){
+    var cell = e.target.closest(".cal__day");
+    if (!cell || !cell.dataset.d) return;
+    toggleWork(cell.dataset.d, cell);
+  });
+
   function toggleWork(dIso, node){
-    var rec = daysMap()[dIso] || { tips:0, worked:0 };
-    var nw = rec.worked ? 0 : 1;
+    var worked = node.classList.contains("cal__day--work") ? 0 : 1;
     haptic();
-    node.classList.toggle("cal__day--work", !!nw);
-    var shifts = $("cal").querySelectorAll(".cal__day--work").length;
-    $("cSh").textContent = shifts;
-    $("cSal").textContent = rub(shifts * rateFor(shifts));
-    api("upsertDay", { date: dIso, tips: rec.tips, worked: nw })
-      .then(function(){ return load(); })
-      .catch(function(err){ toast(err.message); load(); });
+    node.classList.toggle("cal__day--work", !!worked);
+    mutateDay(dIso, { worked: worked });
+    paintTotals();
+  }
+
+  function paintTotals(){
+    if (!state) return;
+    var d = state;
+    $("cSh").textContent = d.shifts;
+    $("cSal").textContent = rub(d.salary);
+    $("heroShifts").textContent = d.shifts + " " + plural(d.shifts, "смена", "смены", "смен");
+    $("stSalSub").textContent = d.shifts + " × " + rub(d.rate);
+    roll($("heroTotal"), d.total);
+    roll($("stSal"), d.salary);
   }
 
   /* ---------- отрисовка ---------- */
@@ -604,8 +665,8 @@
   }
 
   function load(dir){
-    return api("getMonth", { ym: ym() }).then(function(j){
-      state = j; render();
+    return loadMonth(ym()).then(function(){
+      render();
       if (dir && !reduce && $("page1").animate){
         (page === 1 ? $("page1") : $("page2")).animate(
           [{ opacity:0, transform:"translateX(" + (dir*22) + "px)" }, { opacity:1, transform:"none" }],
@@ -653,15 +714,19 @@
   }, { passive:true });
 
   window.addEventListener("resize", syncHeight);
+  window.addEventListener("pagehide", function(){ if (dirty && !saving) doSave(); });
+  document.addEventListener("visibilitychange", function(){
+    if (document.visibilityState === "hidden" && dirty && !saving) doSave();
+  });
 
   /* ---------- чаевые за сегодня ---------- */
   $("tipsSave").addEventListener("click", function(){
     var val = Math.max(0, parseInt($("tipsInput").value, 10) || 0);
-    var t = daysMap()[todayISO];
     haptic();
-    api("upsertDay", { date: todayISO, tips: val, worked: t ? t.worked === 1 : false })
-      .then(function(){ $("tipsInput").blur(); toast(val ? "Записал" : "Очистил"); return load(); })
-      .catch(function(err){ toast(err.message); });
+    mutateDay(todayISO, { tips: val });
+    $("tipsInput").blur();
+    toast(val ? "Записал" : "Очистил");
+    render();
   });
   $("tipsInput").addEventListener("keydown", function(e){ if (e.key === "Enter") $("tipsSave").click(); });
 
@@ -702,15 +767,17 @@
     if (!date){ toast("Выбери дату"); return; }
     var tips = Math.max(0, parseInt($("dTips").value, 10) || 0);
     haptic();
-    api("upsertDay", { date: date, tips: tips, worked: $("dWorked").checked })
-      .then(function(){ closeSheet($("sheetWrap")); toast("Сохранено"); return load(); })
-      .catch(function(err){ toast(err.message); });
+    mutateDay(date, { tips: tips, worked: $("dWorked").checked });
+    closeSheet($("sheetWrap"));
+    toast("Сохранено");
+    render();
   });
   $("dDel").addEventListener("click", function(){
     if (!editing) return; haptic("medium");
-    api("deleteDay", { date: editing })
-      .then(function(){ closeSheet($("sheetWrap")); toast("Удалено"); return load(); })
-      .catch(function(err){ toast(err.message); });
+    mutateDay(editing, { tips: 0, worked: 0 });
+    closeSheet($("sheetWrap"));
+    toast("Удалено");
+    render();
   });
 
   /* ---------- появление блоков ---------- */
