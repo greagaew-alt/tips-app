@@ -208,12 +208,14 @@
   .field input:focus{ outline:2px solid var(--accent); outline-offset:-2px; }
   /* дата: обёртка фиксированного размера + инпут absolute inset:0 —
      iOS не может распереть его по интринсик-ширине */
-  .datewrap{ position:relative; height:50px; border-radius:12px; overflow:hidden; }
-  .datewrap:focus-within{ box-shadow:0 0 0 2px var(--accent); }
+  .datewrap{
+    position:relative; height:50px; border-radius:12px; overflow:hidden;
+    border:1px solid var(--stroke-2); background:rgba(0,0,0,.25);
+  }
+  .datewrap:focus-within{ border-color:transparent; box-shadow:0 0 0 2px var(--accent); }
   .datewrap input{
     position:absolute; inset:0; box-sizing:border-box; width:100%; height:100%; padding:0 14px; margin:0;
-    border:1px solid var(--stroke-2); border-radius:12px;
-    background:rgba(0,0,0,.25); color:var(--text); font:inherit; font-size:17px; font-weight:700;
+    border:0; background:transparent; color:var(--text); font:inherit; font-size:17px; font-weight:700;
     line-height:48px;
   }
   .datewrap input:focus{ outline:none; }
