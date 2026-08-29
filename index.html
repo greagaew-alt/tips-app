@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<title>Чаевые</title>
+<title>Финансы</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   @font-face{
@@ -206,6 +206,17 @@
     border:1px solid var(--stroke-2); background:rgba(0,0,0,.25); color:var(--text); font-size:17px; font-weight:700;
   }
   .field input:focus{ outline:2px solid var(--accent); outline-offset:1px; }
+  .daystep{
+    display:flex; align-items:center; gap:8px; height:50px;
+    border:1px solid var(--stroke-2); border-radius:12px; background:rgba(0,0,0,.25); padding:4px;
+  }
+  .daystep button{
+    width:42px; height:42px; flex:0 0 auto; border-radius:9px; background:var(--card);
+    font-size:20px; font-weight:600; color:var(--text); display:grid; place-items:center; transition:transform .1s;
+  }
+  .daystep button:active{ transform:scale(.9); }
+  .daystep button:disabled{ opacity:.3; }
+  .daystep span{ flex:1; text-align:center; font-size:16px; font-weight:700; }
   .toggle-row{ display:flex; align-items:center; justify-content:space-between; padding:10px 0 16px; font-size:15px; font-weight:600; }
   .switch{ position:relative; width:52px; height:31px; flex:0 0 auto; }
   .switch input{ position:absolute; opacity:0; width:100%; height:100%; margin:0; }
@@ -322,8 +333,12 @@
       <div class="grip"></div>
       <div class="sheet__title" id="sheetTitle">День</div>
       <div class="field" id="dateField" hidden>
-        <label for="dDate">Дата</label>
-        <input type="date" id="dDate">
+        <label>Дата</label>
+        <div class="daystep">
+          <button type="button" id="dPrev" aria-label="На день назад">‹</button>
+          <span id="dDateLbl" class="num">—</span>
+          <button type="button" id="dNext" aria-label="На день вперёд">›</button>
+        </div>
       </div>
       <div class="field">
         <label for="dTips">Чаевые, ₽</label>
@@ -743,27 +758,54 @@
   if (tg && tg.BackButton) tg.BackButton.onClick(function(){ if (stack.length) closeSheet(stack[stack.length-1]); });
   document.addEventListener("keydown", function(e){ if (e.key === "Escape" && stack.length) closeSheet(stack[stack.length-1]); });
 
-  var editing = null;
+  var editing = null, sheetDate = null;
+  function shiftIso(isoStr, delta){
+    var p = isoStr.split("-");
+    var dt = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]) + delta);
+    return dt.getFullYear() + "-" + pad2(dt.getMonth() + 1) + "-" + pad2(dt.getDate());
+  }
+  function isoLabel(isoStr){
+    var p = isoStr.split("-"), s = Number(p[2]) + " " + MON_GEN[Number(p[1]) - 1];
+    if (Number(p[0]) !== now.getFullYear()) s += " " + p[0];
+    return s;
+  }
+  function renderSheetDate(){
+    $("dDateLbl").textContent = isoLabel(sheetDate);
+    $("dNext").disabled = sheetDate >= todayISO;
+    // если этот день уже записан в открытом месяце — показать его значения
+    var rec = null, i;
+    if (state && monthOf(sheetDate) === state.ym)
+      for (i = 0; i < state.days.length; i++) if (state.days[i].d === sheetDate){ rec = state.days[i]; break; }
+    $("dTips").value = rec && rec.tips ? rec.tips : "";
+    $("dWorked").checked = !!(rec && rec.worked);
+    $("dDel").style.display = rec ? "" : "none";
+  }
+  $("dPrev").addEventListener("click", function(){ sheetDate = shiftIso(sheetDate, -1); renderSheetDate(); });
+  $("dNext").addEventListener("click", function(){
+    if (sheetDate < todayISO){ sheetDate = shiftIso(sheetDate, 1); renderSheetDate(); }
+  });
+
   function openDay(dateISO, tips, worked){
     editing = dateISO;
     var isNew = !dateISO;
     $("dateField").hidden = !isNew;
     if (isNew){
-      $("dDate").value = todayISO; $("dDate").max = todayISO;
-      $("sheetTitle").textContent = "Новый день";
+      sheetDate = todayISO;
+      $("sheetTitle").textContent = "Запись за день";
+      renderSheetDate();
     } else {
       var p = dateISO.split("-");
       $("sheetTitle").textContent = Number(p[2]) + " " + MON_GEN[Number(p[1])-1];
+      $("dTips").value = tips || "";
+      $("dWorked").checked = !!worked;
+      $("dDel").style.display = "";
     }
-    $("dTips").value = tips || "";
-    $("dWorked").checked = !!worked;
-    $("dDel").style.display = isNew ? "none" : "";
     openSheet($("sheetWrap"));
     setTimeout(function(){ $("dTips").focus(); }, 280);
   }
   $("otherDay").addEventListener("click", function(){ openDay(null, 0, false); });
   $("dSave").addEventListener("click", function(){
-    var date = editing || $("dDate").value;
+    var date = editing || sheetDate;
     if (!date){ toast("Выбери дату"); return; }
     var tips = Math.max(0, parseInt($("dTips").value, 10) || 0);
     haptic();
@@ -773,8 +815,9 @@
     render();
   });
   $("dDel").addEventListener("click", function(){
-    if (!editing) return; haptic("medium");
-    mutateDay(editing, { tips: 0, worked: 0 });
+    var date = editing || sheetDate;
+    if (!date) return; haptic("medium");
+    mutateDay(date, { tips: 0, worked: 0 });
     closeSheet($("sheetWrap"));
     toast("Удалено");
     render();
