@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <title>Финансы</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -191,7 +191,7 @@
   .sheet-wrap.open{ display:block; }
   .sheet-bg{ position:absolute; inset:0; background:rgba(4,7,16,.62); backdrop-filter:blur(2px); }
   .sheet{
-    position:absolute; left:0; right:0; bottom:0; max-width:480px; margin:0 auto;
+    position:absolute; left:0; right:0; bottom:0; max-width:480px; margin:0 auto; overflow:hidden;
     background:linear-gradient(180deg, #121a30, #0c1122); border-top:1px solid var(--stroke-2);
     border-radius:22px 22px 0 0; padding:8px 18px calc(24px + env(safe-area-inset-bottom));
     transform:translateY(100%); transition:transform .26s cubic-bezier(.22,.61,.36,1);
@@ -199,18 +199,13 @@
   .sheet-wrap.open .sheet{ transform:translateY(0); }
   .grip{ width:38px; height:4px; border-radius:2px; background:var(--stroke-2); margin:6px auto 16px; }
   .sheet__title{ font-size:17px; font-weight:800; letter-spacing:-.015em; margin-bottom:16px; }
-  .field{ margin-bottom:14px; }
+  .field{ margin-bottom:14px; overflow:hidden; }
   .field label{ display:block; font-size:12px; color:var(--muted); font-weight:500; margin-bottom:6px; }
   .field input{
-    display:block; width:100%; min-width:0; max-width:100%; height:50px; padding:0 14px; border-radius:12px;
+    width:100%; height:50px; padding:0 14px; border-radius:12px;
     border:1px solid var(--stroke-2); background:rgba(0,0,0,.25); color:var(--text); font-size:17px; font-weight:700;
-    -webkit-appearance:none; appearance:none;
   }
-  .field input:focus{ outline:2px solid var(--accent); outline-offset:1px; }
-  .field input::-webkit-outer-spin-button, .field input::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
-  #dDate{ font-family:inherit; }
-  #dDate::-webkit-date-and-time-value{ text-align:left; margin:0; }
-  #dDate::-webkit-calendar-picker-indicator{ margin-left:auto; opacity:.5; }
+  .field input:focus{ outline:2px solid var(--accent); outline-offset:-2px; }
   .toggle-row{ display:flex; align-items:center; justify-content:space-between; padding:10px 0 16px; font-size:15px; font-weight:600; }
   .switch{ position:relative; width:52px; height:31px; flex:0 0 auto; }
   .switch input{ position:absolute; opacity:0; width:100%; height:100%; margin:0; }
