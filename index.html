@@ -228,17 +228,15 @@
   .datewrap input:focus{ outline:none; }
   .datewrap input::-webkit-date-and-time-value{ text-align:left; }
   .toggle-row{ display:flex; align-items:center; justify-content:space-between; padding:10px 0 16px; font-size:15px; font-weight:600; }
-  .shift-seg{ display:flex; gap:8px; }
-  .shift-seg button{
-    flex:1; height:46px; border-radius:12px; border:1px solid var(--stroke-2); background:var(--card);
-    font-size:14px; font-weight:700; color:var(--text); transition:transform .1s, background .15s;
+  .shift-pick{ display:flex; flex-direction:column; gap:10px; }
+  .shift-pick button{
+    width:100%; height:52px; border-radius:14px; border:1px solid var(--stroke-2); background:var(--card);
+    font-size:16px; font-weight:700; color:var(--text); transition:transform .1s, background .15s;
   }
-  .shift-seg button:active{ transform:scale(.96); }
-  .shift-seg button[aria-pressed="true"]{
+  .shift-pick button:active{ transform:scale(.98); }
+  .shift-pick button[aria-pressed="true"]{
     background:linear-gradient(180deg, var(--accent-2), var(--accent)); color:#fff; border-color:transparent;
   }
-  .shift-seg--big{ flex-direction:column; }
-  .shift-seg--big button{ height:54px; font-size:16px; }
   .switch{ position:relative; width:52px; height:31px; flex:0 0 auto; }
   .switch input{ position:absolute; opacity:0; width:100%; height:100%; margin:0; }
   .switch i{ position:absolute; inset:0; border-radius:999px; background:var(--stroke-2); transition:background .18s; }
@@ -361,14 +359,6 @@
         <label for="dTips">Чаевые, ₽</label>
         <input type="number" id="dTips" class="num" inputmode="numeric" min="0" step="50" placeholder="0">
       </div>
-      <div class="field">
-        <label>Смена</label>
-        <div class="shift-seg" id="dShift">
-          <button type="button" data-w="0" aria-pressed="true">Нет</button>
-          <button type="button" data-w="0.5" aria-pressed="false">½ смены</button>
-          <button type="button" data-w="1" aria-pressed="false">Полная</button>
-        </div>
-      </div>
       <div class="sheet__actions">
         <button class="sheet__save" id="dSave" type="button">Сохранить</button>
         <button class="sheet__del" id="dDel" type="button">Удалить</button>
@@ -382,7 +372,7 @@
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="shiftTitle">
       <div class="grip"></div>
       <div class="sheet__title" id="shiftTitle">День</div>
-      <div class="shift-seg shift-seg--big" id="shPick">
+      <div class="shift-pick" id="shPick">
         <button type="button" data-w="1">Полная смена</button>
         <button type="button" data-w="0.5">Половина</button>
         <button type="button" data-w="0">Убрать</button>
@@ -703,7 +693,7 @@
           '<div class="day__date"><b>' + Number(p[2]) + '</b><span>' + MON_SHORT[Number(p[1])-1] + '</span></div>' +
           '<div class="day__mid">' + (row.worked >= 1 ? "смена" : row.worked > 0 ? "½ смены" : "без смены") + '</div>' +
           '<div class="day__val">' + rub(row.tips) + '</div>';
-        b.addEventListener("click", function(){ openDay(row.d, row.tips, row.worked); });
+        b.addEventListener("click", function(){ openDay(row.d, row.tips); });
         list.appendChild(b);
       });
     }
@@ -812,24 +802,15 @@
   if (tg && tg.BackButton) tg.BackButton.onClick(function(){ if (stack.length) closeSheet(stack[stack.length-1]); });
   document.addEventListener("keydown", function(e){ if (e.key === "Escape" && stack.length) closeSheet(stack[stack.length-1]); });
 
-  /* сегмент «Нет / ½ / Полная» */
   function segSet(seg, w){
     w = Number(w) || 0;
     seg.querySelectorAll("button").forEach(function(b){
       b.setAttribute("aria-pressed", String(Number(b.dataset.w) === w));
     });
   }
-  function segGet(seg){
-    var b = seg.querySelector('button[aria-pressed="true"]');
-    return b ? Number(b.dataset.w) : 0;
-  }
-  $("dShift").addEventListener("click", function(e){
-    var b = e.target.closest("button"); if (!b) return;
-    segSet($("dShift"), b.dataset.w); haptic();
-  });
 
   var editing = null;
-  function openDay(dateISO, tips, worked){
+  function openDay(dateISO, tips){
     editing = dateISO;
     var isNew = !dateISO;
     $("dateField").hidden = !isNew;
@@ -841,25 +822,24 @@
       $("sheetTitle").textContent = Number(p[2]) + " " + MON_GEN[Number(p[1])-1];
     }
     $("dTips").value = tips || "";
-    segSet($("dShift"), worked);
     $("dDel").style.display = isNew ? "none" : "";
     openSheet($("sheetWrap"));
     setTimeout(function(){ $("dTips").focus(); }, 280);
   }
-  $("otherDay").addEventListener("click", function(){ openDay(null, 0, 0); });
+  $("otherDay").addEventListener("click", function(){ openDay(null, 0); });
   $("dSave").addEventListener("click", function(){
     var date = editing || $("dDate").value;
     if (!date){ toast("Выбери дату"); return; }
     var tips = Math.max(0, parseInt($("dTips").value, 10) || 0);
     haptic();
-    mutateDay(date, { tips: tips, worked: segGet($("dShift")) });
+    mutateDay(date, { tips: tips });
     closeSheet($("sheetWrap"));
     toast("Сохранено");
     render();
   });
   $("dDel").addEventListener("click", function(){
     if (!editing) return; haptic("medium");
-    mutateDay(editing, { tips: 0, worked: 0 });
+    mutateDay(editing, { tips: 0 });
     closeSheet($("sheetWrap"));
     toast("Удалено");
     render();
