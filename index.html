@@ -191,6 +191,9 @@
   .cal__day--half::after{
     content:"½"; position:absolute; top:3px; right:4px; font-size:9px; font-weight:800; color:var(--accent-2); opacity:.9;
   }
+  .cal__day--double::after{
+    content:"×2"; position:absolute; top:3px; right:4px; font-size:9px; font-weight:800; color:#fff; opacity:.95;
+  }
   .cal__tip{ font-size:9px; font-weight:700; line-height:1; opacity:.85; font-variant-numeric:tabular-nums; }
   .cal__day:not(.cal__day--work) .cal__tip{ color:var(--good); }
 
@@ -374,6 +377,7 @@
       <div class="sheet__title" id="shiftTitle">День</div>
       <div class="shift-pick" id="shPick">
         <button type="button" data-w="1">Полная смена</button>
+        <button type="button" data-w="2">Двойная (гастроли)</button>
         <button type="button" data-w="0.5">Половина</button>
         <button type="button" data-w="0">Убрать</button>
       </div>
@@ -437,23 +441,30 @@
      Один ключ на месяц:  m_ГГГГ-ММ  ->  {"<день>":{t:чаевые, w:0|1}} */
   var CS = !!(tg && tg.CloudStorage && tg.isVersionAtLeast && tg.isVersionAtLeast("6.9"));
 
-  function storeGet(k){
-    if (CS) return new Promise(function(res, rej){
-      tg.CloudStorage.getItem(k, function(err, val){ err ? rej(new Error(err)) : res(val || ""); });
+  // CloudStorage иногда не вызывает колбэк — без таймаута очередь записи вставала навсегда
+  function withTimeout(p){
+    return new Promise(function(res, rej){
+      var t = setTimeout(function(){ rej(new Error("нет связи")); }, 8000);
+      p.then(function(v){ clearTimeout(t); res(v); }, function(e){ clearTimeout(t); rej(e); });
     });
+  }
+  function storeGet(k){
+    if (CS) return withTimeout(new Promise(function(res, rej){
+      tg.CloudStorage.getItem(k, function(err, val){ err ? rej(new Error(err)) : res(val || ""); });
+    }));
     try{ return Promise.resolve(localStorage.getItem(k) || ""); }catch(e){ return Promise.resolve(""); }
   }
   function storeSet(k, v){
-    if (CS) return new Promise(function(res, rej){
+    if (CS) return withTimeout(new Promise(function(res, rej){
       tg.CloudStorage.setItem(k, v, function(err){ err ? rej(new Error(err)) : res(); });
-    });
+    }));
     try{ localStorage.setItem(k, v); }catch(e){}
     return Promise.resolve();
   }
   function storeDel(k){
-    if (CS) return new Promise(function(res, rej){
+    if (CS) return withTimeout(new Promise(function(res, rej){
       tg.CloudStorage.removeItem(k, function(err){ err ? rej(new Error(err)) : res(); });
-    });
+    }));
     try{ localStorage.removeItem(k); }catch(e){}
     return Promise.resolve();
   }
@@ -477,7 +488,9 @@
      (см. doSave) — поэтому быстрые тапы по календарю ничего не теряют. */
   function monthOf(dateISO){ var p = dateISO.split("-"); return p[0] + "-" + p[1]; }
 
-  var saving = false, pendingSave = false, dirty = false;
+  var saving = false, pendingSave = false, dirty = false, retryT = null;
+  // точечные записи в другой месяц — цепочкой; loadMonth ждёт их, чтобы не прочитать старое
+  var pointWrites = Promise.resolve();
   function scheduleSave(){ dirty = true; doSave(); }
   function doSave(){
     if (saving){ pendingSave = true; return; }
@@ -491,7 +504,8 @@
       if (pendingSave || dirty){ pendingSave = false; doSave(); }
     }, function(){
       saving = false; dirty = true;
-      toast("Не сохранилось, повтори");
+      toast("Нет связи — сохраню, как появится");
+      clearTimeout(retryT); retryT = setTimeout(doSave, 3000);
     });
   }
   function flushSave(){
@@ -514,7 +528,8 @@
   }
 
   function loadMonth(ymStr){
-    return flushSave().then(function(){ return storeGet("m_" + ymStr); }).then(function(raw){
+    return flushSave().then(function(){ return pointWrites; })
+      .then(function(){ return storeGet("m_" + ymStr); }).then(function(raw){
       var obj = parseMonth(raw), days = [];
       Object.keys(obj).map(Number).sort(function(a, b){ return b - a; }).forEach(function(dd){
         var rec = obj[dd] || {};
@@ -542,13 +557,30 @@
     }
     // другой месяц (из шторки «другой день») — точечная запись
     var key = "m_" + monthOf(dateISO), day = String(Number(dateISO.split("-")[2]));
-    return storeGet(key).then(function(raw){
-      var obj = parseMonth(raw), o = obj[day] || { t: 0, w: 0 };
-      var t = patch.hasOwnProperty("tips")   ? Math.max(0, patch.tips | 0)  : (o.t | 0);
-      var w = patch.hasOwnProperty("worked") ? (Number(patch.worked) || 0) : (Number(o.w) || 0);
-      if (!t && !w) delete obj[day]; else obj[day] = { t: t, w: w };
-      return Object.keys(obj).length ? storeSet(key, JSON.stringify(obj)) : storeDel(key);
-    }).catch(function(err){ toast("Не сохранилось: " + err.message); });
+    function write(){
+      return storeGet(key).then(function(raw){
+        var obj = parseMonth(raw), o = obj[day] || { t: 0, w: 0 };
+        var t = patch.hasOwnProperty("tips")   ? Math.max(0, patch.tips | 0)  : (o.t | 0);
+        var w = patch.hasOwnProperty("worked") ? (Number(patch.worked) || 0) : (Number(o.w) || 0);
+        if (!t && !w) delete obj[day]; else obj[day] = { t: t, w: w };
+        return Object.keys(obj).length ? storeSet(key, JSON.stringify(obj)) : storeDel(key);
+      });
+    }
+    // одна повторная попытка, потом честно говорим, что не вышло
+    pointWrites = pointWrites.then(function(){
+      return write().catch(function(){ return write(); });
+    }).catch(function(err){ toast("Не сохранилось: " + err.message + ". Повтори"); });
+    return pointWrites;
+  }
+
+  /* запись чаевых на любой день; если день из другого месяца — переходим туда,
+     чтобы сразу было видно, что сохранилось */
+  function saveTips(dateISO, val){
+    mutateDay(dateISO, { tips: val });
+    if (state && monthOf(dateISO) !== state.ym){
+      var p = dateISO.split("-");
+      go((Number(p[0]) * 12 + Number(p[1]) - 1) - (cur.y * 12 + cur.m));
+    } else render();
   }
 
   var toastEl = $("toast"), toastT;
@@ -617,6 +649,7 @@
       var w = rec ? (Number(rec.worked) || 0) : 0;
       b.className = "cal__day"
         + (w >= 1 ? " cal__day--work" : w > 0 ? " cal__day--half" : "")
+        + (w >= 2 ? " cal__day--double" : "")
         + (wd >= 5 ? " cal__day--we" : "")
         + (dIso === todayISO ? " cal__day--today" : "");
       b.dataset.d = dIso;
@@ -638,7 +671,7 @@
     var had = node.classList.contains("cal__day--work") || node.classList.contains("cal__day--half");
     var worked = had ? 0 : 1;
     haptic();
-    node.classList.remove("cal__day--half");
+    node.classList.remove("cal__day--half", "cal__day--double");
     node.classList.toggle("cal__day--work", !!worked);
     mutateDay(dIso, { worked: worked });
     paintTotals();
@@ -691,7 +724,7 @@
         b.className = "day"; b.type = "button";
         b.innerHTML =
           '<div class="day__date"><b>' + Number(p[2]) + '</b><span>' + MON_SHORT[Number(p[1])-1] + '</span></div>' +
-          '<div class="day__mid">' + (row.worked >= 1 ? "смена" : row.worked > 0 ? "½ смены" : "без смены") + '</div>' +
+          '<div class="day__mid">' + (row.worked >= 2 ? "двойная смена" : row.worked >= 1 ? "смена" : row.worked > 0 ? "½ смены" : "без смены") + '</div>' +
           '<div class="day__val">' + rub(row.tips) + '</div>';
         b.addEventListener("click", function(){ openDay(row.d, row.tips); });
         list.appendChild(b);
@@ -782,10 +815,9 @@
   $("tipsSave").addEventListener("click", function(){
     var val = Math.max(0, parseInt($("tipsInput").value, 10) || 0);
     haptic();
-    mutateDay(todayISO, { tips: val });
     $("tipsInput").blur();
+    saveTips(todayISO, val);
     toast(val ? "Записал" : "Очистил");
-    render();
   });
   $("tipsInput").addEventListener("keydown", function(e){ if (e.key === "Enter") $("tipsSave").click(); });
 
@@ -832,10 +864,10 @@
     if (!date){ toast("Выбери дату"); return; }
     var tips = Math.max(0, parseInt($("dTips").value, 10) || 0);
     haptic();
-    mutateDay(date, { tips: tips });
     closeSheet($("sheetWrap"));
-    toast("Сохранено");
-    render();
+    saveTips(date, tips);
+    var p = date.split("-");
+    toast("Сохранено: " + Number(p[2]) + " " + MON_GEN[Number(p[1])-1]);
   });
   $("dDel").addEventListener("click", function(){
     if (!editing) return; haptic("medium");
